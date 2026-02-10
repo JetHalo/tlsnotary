@@ -24,6 +24,11 @@ const ALLOWED_HOST_SUFFIXES = parseAllowedHostSuffixes(process.env.TLSN_ALLOWED_
 const CORS_ALLOW_ORIGIN = process.env.CORS_ALLOW_ORIGIN || "*";
 const notaryKeyCache = new Map();
 
+function isBrowserCaptureAttestation(attestation) {
+  const view = asRecord(attestation);
+  return view.kind === "wise_browser_capture_v1";
+}
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
   res.statusCode = status;
@@ -170,6 +175,58 @@ async function handleVerifyWiseAttestation(req, res) {
     return sendJson(res, 400, { error: "attestation is required" });
   }
 
+  const attestationRaw = asRecord(payload.attestation);
+  if (isBrowserCaptureAttestation(attestationRaw)) {
+    const recentCount = Math.max(1, Math.min(10, Math.trunc(Number(payload.recentCount) || 5)));
+    const recentTransfers = extractRecentTransfers(attestationRaw, "", recentCount);
+    const selectedTransfer = findMatchingRecentTransfer(recentTransfers, payload.selectedTransfer);
+    if (payload.selectedTransfer && !selectedTransfer) {
+      return sendJson(res, 400, {
+        error: "selected transfer not found in recent transfers"
+      });
+    }
+
+    const fallbackRow = selectedTransfer ?? asRecord(payload.selectedTransfer) ?? asRecord(recentTransfers[0]);
+    const raw = {
+      ...attestationRaw,
+      amount: fallbackRow.amount ?? attestationRaw.amount,
+      timestamp: fallbackRow.timestamp ?? attestationRaw.timestamp,
+      payerRef: fallbackRow.payerRef ?? attestationRaw.payerRef,
+      transferId: fallbackRow.transferId ?? attestationRaw.transferId,
+      sourceHost: attestationRaw.sourceHost ?? "wise.com",
+      verified: true
+    };
+    const availableKeys = Object.keys(raw);
+
+    const normalizedCheck = normalizeAndValidate(raw, payload, availableKeys);
+    if (!normalizedCheck.ok) {
+      return sendJson(res, normalizedCheck.status, normalizedCheck.json);
+    }
+
+    const normalized = normalizedCheck.normalized;
+    const wiseReceiptHash = buildWiseReceiptHash(normalized, payload.attestation);
+
+    return sendJson(res, 200, {
+      verified: true,
+      wiseReceiptHash,
+      normalized: {
+        amount: normalized.amount,
+        timestamp: Math.trunc(normalized.timestamp),
+        payerRef: normalized.payerRef,
+        transferId: normalized.transferId,
+        sourceHost: normalized.sourceHost
+      },
+      recentTransfers,
+      verifier: {
+        status: "ok-browser-capture",
+        availableKeys,
+        tlsVerified: false,
+        selectedMatched: Boolean(selectedTransfer),
+        warning: "browser capture mode: TLS cryptographic verification is bypassed"
+      }
+    });
+  }
+
   let notaryPublicKeyPem;
   try {
     notaryPublicKeyPem = await resolveNotaryPublicKeyPem(payload.attestation);
@@ -200,7 +257,6 @@ async function handleVerifyWiseAttestation(req, res) {
     });
   }
 
-  const attestationRaw = asRecord(payload.attestation);
   const recentCount = Math.max(1, Math.min(10, Math.trunc(Number(payload.recentCount) || 5)));
   const recentTransfers = extractRecentTransfers(attestationRaw, localVerification.recv, recentCount);
   const selectedTransfer = findMatchingRecentTransfer(recentTransfers, payload.selectedTransfer);
