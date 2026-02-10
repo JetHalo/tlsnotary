@@ -252,6 +252,26 @@ export function validateExpected(expected, normalized) {
     }
   }
 
+  if (
+    typeof expected.transferId === "string" &&
+    expected.transferId.trim() &&
+    typeof normalized.transferId === "string" &&
+    normalized.transferId.trim() &&
+    expected.transferId.trim() !== normalized.transferId.trim()
+  ) {
+    errors.push(`transferId mismatch: expected=${expected.transferId}, actual=${normalized.transferId}`);
+  }
+
+  if (
+    typeof expected.payerRef === "string" &&
+    expected.payerRef.trim() &&
+    typeof normalized.payerRef === "string" &&
+    normalized.payerRef.trim() &&
+    expected.payerRef.trim() !== normalized.payerRef.trim()
+  ) {
+    errors.push(`payerRef mismatch: expected=${expected.payerRef}, actual=${normalized.payerRef}`);
+  }
+
   return errors;
 }
 
@@ -268,4 +288,133 @@ export function buildWiseReceiptHash(normalized, attestation) {
       attestationDigest
     ].join("|")
   );
+}
+
+function toFiniteNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function tryParseJson(text) {
+  if (typeof text !== "string") return undefined;
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractJsonBodiesFromRecv(recv) {
+  const text = String(recv || "");
+  if (!text) return [];
+  const candidates = new Set();
+
+  const sections = text.split(/\r?\n\r?\n/g).map((s) => s.trim()).filter(Boolean);
+  for (const part of sections) {
+    if (part.startsWith("{") || part.startsWith("[")) candidates.add(part);
+  }
+
+  const firstObject = text.indexOf("{");
+  const lastObject = text.lastIndexOf("}");
+  if (firstObject >= 0 && lastObject > firstObject) {
+    candidates.add(text.slice(firstObject, lastObject + 1));
+  }
+
+  const firstArray = text.indexOf("[");
+  const lastArray = text.lastIndexOf("]");
+  if (firstArray >= 0 && lastArray > firstArray) {
+    candidates.add(text.slice(firstArray, lastArray + 1));
+  }
+
+  const parsed = [];
+  for (const candidate of candidates) {
+    const value = tryParseJson(candidate);
+    if (value !== undefined) parsed.push(value);
+  }
+  return parsed;
+}
+
+function flattenArrays(value, out = []) {
+  if (Array.isArray(value)) {
+    out.push(value);
+    for (const item of value) flattenArrays(item, out);
+    return out;
+  }
+  if (value && typeof value === "object") {
+    for (const key of Object.keys(value)) {
+      flattenArrays(value[key], out);
+    }
+  }
+  return out;
+}
+
+function normalizeTransferItem(item) {
+  const row = asRecord(item);
+  if (Object.keys(row).length === 0) return undefined;
+
+  const amount =
+    pickString(row, ["amount", "amountText", "value", "paymentAmount", "transferAmount"]) ??
+    pickString(asRecord(row.amount), ["value", "text", "amount", "formatted"]);
+  const timestamp = pickNumber(row, ["timestamp", "time", "createdAt", "created_at", "paidAt", "date"]);
+  const payerRef =
+    pickString(row, ["payerRef", "payer", "sender", "from", "counterparty", "name"]) ??
+    pickString(asRecord(row.sender), ["name", "id"]) ??
+    pickString(asRecord(row.counterparty), ["name", "id"]);
+  const transferId =
+    pickString(row, ["transferId", "paymentId", "transactionId", "id", "reference"]) ??
+    pickString(asRecord(row.transaction), ["id", "reference"]);
+  const status = pickString(row, ["status", "state", "paymentStatus"]);
+  const currency = pickString(row, ["currency", "ccy"]) ?? pickString(asRecord(row.amount), ["currency", "ccy"]);
+
+  if (!amount && !transferId && !payerRef) return undefined;
+  return {
+    amount: amount ?? "",
+    timestamp: toFiniteNumber(timestamp) ?? undefined,
+    payerRef: payerRef ?? "",
+    transferId: transferId ?? "",
+    status: status ?? "",
+    currency: currency ?? ""
+  };
+}
+
+export function extractRecentTransfers(attestation, recv, limit = 5) {
+  const max = Math.max(1, Math.min(10, Math.trunc(Number(limit) || 5)));
+  const roots = [];
+
+  const attestationRecord = asRecord(attestation);
+  if (Object.keys(attestationRecord).length > 0) {
+    roots.push(attestationRecord);
+    roots.push(asRecord(attestationRecord.claimData));
+    roots.push(asRecord(attestationRecord.data));
+    roots.push(asRecord(attestationRecord.fields));
+  }
+
+  const recvJson = extractJsonBodiesFromRecv(recv);
+  for (const value of recvJson) roots.push(value);
+
+  const seen = new Set();
+  const result = [];
+
+  for (const root of roots) {
+    const arrays = flattenArrays(root);
+    for (const arr of arrays) {
+      for (const item of arr) {
+        const normalized = normalizeTransferItem(item);
+        if (!normalized) continue;
+        const key = `${normalized.transferId}|${normalized.timestamp}|${normalized.amount}|${normalized.payerRef}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push(normalized);
+        if (result.length >= max) return result;
+      }
+    }
+  }
+
+  return result;
 }

@@ -7,6 +7,7 @@ import {
   extractNotaryPublicKeyPem,
   extractNotaryUrl,
   extractPublicKeyFromNotaryInfo,
+  extractRecentTransfers,
   hostMatchesAllowedSuffix,
   normalizeVerifierData,
   parseAllowedHostSuffixes,
@@ -113,6 +114,32 @@ function normalizeAndValidate(raw, payload, availableKeys) {
   return { ok: true, normalized };
 }
 
+function findMatchingRecentTransfer(recentTransfers, selectedTransfer) {
+  if (!selectedTransfer || typeof selectedTransfer !== "object") return null;
+  const sel = asRecord(selectedTransfer);
+  const transferId = String(sel.transferId || "").trim();
+  const amount = String(sel.amount || "").trim();
+  const payerRef = String(sel.payerRef || "").trim();
+  const timestamp = Number(sel.timestamp);
+
+  for (const item of recentTransfers) {
+    const row = asRecord(item);
+    const rowTransferId = String(row.transferId || "").trim();
+    if (transferId && rowTransferId && transferId === rowTransferId) return row;
+  }
+
+  for (const item of recentTransfers) {
+    const row = asRecord(item);
+    const sameAmount = amount && String(row.amount || "").trim() === amount;
+    const samePayer = payerRef && String(row.payerRef || "").trim() === payerRef;
+    const rowTs = Number(row.timestamp);
+    const sameTs = Number.isFinite(timestamp) && Number.isFinite(rowTs) ? Math.abs(rowTs - timestamp) <= 60 : false;
+    if (sameAmount && (samePayer || sameTs)) return row;
+  }
+
+  return null;
+}
+
 async function resolveNotaryPublicKeyPem(attestation) {
   const direct = extractNotaryPublicKeyPem(attestation, process.env.TLSN_NOTARY_PUBLIC_KEY_PEM);
   if (direct) return direct;
@@ -174,10 +201,30 @@ async function handleVerifyWiseAttestation(req, res) {
   }
 
   const attestationRaw = asRecord(payload.attestation);
+  const recentCount = Math.max(1, Math.min(10, Math.trunc(Number(payload.recentCount) || 5)));
+  const recentTransfers = extractRecentTransfers(attestationRaw, localVerification.recv, recentCount);
+  const selectedTransfer = findMatchingRecentTransfer(recentTransfers, payload.selectedTransfer);
+  if (payload.selectedTransfer && !selectedTransfer) {
+    return sendJson(res, 400, {
+      error: "selected transfer not found in recent transfers"
+    });
+  }
+
+  const baseSourceHost = localVerification.serverName ?? attestationRaw.sourceHost ?? attestationRaw.host;
+  const baseTimestamp = localVerification.timestamp ?? attestationRaw.timestamp;
+
   const raw = {
     ...attestationRaw,
-    sourceHost: localVerification.serverName ?? attestationRaw.sourceHost ?? attestationRaw.host,
-    timestamp: localVerification.timestamp ?? attestationRaw.timestamp,
+    ...(selectedTransfer
+      ? {
+          amount: selectedTransfer.amount ?? attestationRaw.amount,
+          timestamp: selectedTransfer.timestamp ?? baseTimestamp,
+          payerRef: selectedTransfer.payerRef ?? attestationRaw.payerRef,
+          transferId: selectedTransfer.transferId ?? attestationRaw.transferId
+        }
+      : {}),
+    sourceHost: baseSourceHost,
+    timestamp: selectedTransfer?.timestamp ?? baseTimestamp,
     verified: true,
     sent: localVerification.sent,
     recv: localVerification.recv
@@ -205,10 +252,12 @@ async function handleVerifyWiseAttestation(req, res) {
       transferId: normalized.transferId,
       sourceHost: normalized.sourceHost
     },
+    recentTransfers,
     verifier: {
       status: "ok-local",
       availableKeys,
-      serverName: localVerification.serverName ?? null
+      serverName: localVerification.serverName ?? null,
+      selectedMatched: Boolean(selectedTransfer)
     }
   });
 }

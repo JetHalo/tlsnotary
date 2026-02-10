@@ -5,6 +5,7 @@ import {
   extractNotaryPublicKeyPem,
   extractNotaryUrl,
   extractPublicKeyFromNotaryInfo,
+  extractRecentTransfers,
   extractPresentationHex,
   hostMatchesAllowedSuffix,
   normalizeVerifierData,
@@ -110,4 +111,27 @@ test("extractPublicKeyFromNotaryInfo supports common key fields", () => {
     }),
     /BEGIN PUBLIC KEY/
   );
+});
+
+test("extractRecentTransfers parses top 5 transfers from recv json", () => {
+  const recv = [
+    "HTTP/1.1 200 OK",
+    "content-type: application/json",
+    "",
+    JSON.stringify({
+      transactions: [
+        { id: "t1", amount: "10", timestamp: 1, payer: "a" },
+        { id: "t2", amount: "20", timestamp: 2, payer: "b" },
+        { id: "t3", amount: "30", timestamp: 3, payer: "c" },
+        { id: "t4", amount: "40", timestamp: 4, payer: "d" },
+        { id: "t5", amount: "50", timestamp: 5, payer: "e" },
+        { id: "t6", amount: "60", timestamp: 6, payer: "f" }
+      ]
+    })
+  ].join("\r\n");
+
+  const recent = extractRecentTransfers({}, recv, 5);
+  assert.equal(recent.length, 5);
+  assert.equal(recent[0].transferId, "t1");
+  assert.equal(recent[4].transferId, "t5");
 });

@@ -12,9 +12,18 @@ This service verifies TLSN presentation locally (inside this service), then enfo
 {
   "proofId": "proof-123",
   "attestation": { "..." : "..." },
+  "recentCount": 5,
+  "selectedTransfer": {
+    "transferId": "tx-1",
+    "amount": "1000000",
+    "timestamp": 1739102400,
+    "payerRef": "alice"
+  },
   "expected": {
     "amount": "1000000",
-    "timestamp": 1739102400
+    "timestamp": 1739102400,
+    "transferId": "tx-1",
+    "payerRef": "alice"
   }
 }
 ```
@@ -40,6 +49,16 @@ This service verifies TLSN presentation locally (inside this service), then enfo
     "transferId": "xxxx",
     "sourceHost": "wise.com"
   },
+  "recentTransfers": [
+    {
+      "amount": "1000000",
+      "timestamp": 1739102400,
+      "payerRef": "xxxx",
+      "transferId": "tx-1",
+      "status": "COMPLETED",
+      "currency": "GBP"
+    }
+  ],
   "verifier": {
     "status": "ok-local",
     "availableKeys": ["..."]
