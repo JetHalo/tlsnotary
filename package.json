@@ -1,0 +1,17 @@
+{
+  "name": "zkp2p-tlsn-verifier",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test test/**/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@dylan1951/tlsn-ts": "^0.1.8"
+  }
+}
