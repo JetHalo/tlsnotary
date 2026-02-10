@@ -179,31 +179,66 @@ async function handleVerifyWiseAttestation(req, res) {
   if (isBrowserCaptureAttestation(attestationRaw)) {
     const recentCount = Math.max(1, Math.min(10, Math.trunc(Number(payload.recentCount) || 5)));
     const recentTransfers = extractRecentTransfers(attestationRaw, "", recentCount);
+    const selectedRequested = Boolean(payload.selectedTransfer);
     const selectedTransfer = findMatchingRecentTransfer(recentTransfers, payload.selectedTransfer);
-    if (payload.selectedTransfer && !selectedTransfer) {
+    if (selectedRequested && !selectedTransfer) {
       return sendJson(res, 400, {
         error: "selected transfer not found in recent transfers"
       });
     }
 
-    const fallbackRow = selectedTransfer ?? asRecord(payload.selectedTransfer) ?? asRecord(recentTransfers[0]);
-    const raw = {
-      ...attestationRaw,
-      amount: fallbackRow.amount ?? attestationRaw.amount,
-      timestamp: fallbackRow.timestamp ?? attestationRaw.timestamp,
-      payerRef: fallbackRow.payerRef ?? attestationRaw.payerRef,
-      transferId: fallbackRow.transferId ?? attestationRaw.transferId,
-      sourceHost: attestationRaw.sourceHost ?? "wise.com",
-      verified: true
-    };
-    const availableKeys = Object.keys(raw);
-
-    const normalizedCheck = normalizeAndValidate(raw, payload, availableKeys);
-    if (!normalizedCheck.ok) {
-      return sendJson(res, normalizedCheck.status, normalizedCheck.json);
+    if (!selectedRequested) {
+      return sendJson(res, 200, {
+        verified: true,
+        recentTransfers,
+        verifier: {
+          status: "ok-browser-capture-preview",
+          tlsVerified: false,
+          warning: "browser capture preview mode: TLS cryptographic verification is bypassed"
+        }
+      });
     }
 
-    const normalized = normalizedCheck.normalized;
+    const fallbackRow = selectedTransfer ?? asRecord(payload.selectedTransfer) ?? {};
+    const normalized = {
+      amount: String(fallbackRow.amount ?? attestationRaw.amount ?? "").trim(),
+      timestamp: Number(fallbackRow.timestamp ?? attestationRaw.timestamp ?? 0),
+      payerRef: String(fallbackRow.payerRef ?? attestationRaw.payerRef ?? "").trim(),
+      transferId: String(fallbackRow.transferId ?? attestationRaw.transferId ?? "").trim(),
+      sourceHost: String(attestationRaw.sourceHost ?? "wise.com").trim().toLowerCase()
+    };
+    const availableKeys = Object.keys({
+      ...attestationRaw,
+      ...fallbackRow
+    });
+    const details = [];
+    if (!normalized.amount) details.push("amount missing");
+    if (!Number.isFinite(normalized.timestamp) || normalized.timestamp <= 0) details.push("timestamp missing");
+    if (!normalized.sourceHost) details.push("sourceHost missing");
+    if (details.length > 0) {
+      return sendJson(res, 400, {
+        error: "browser capture output missing required fields",
+        details,
+        availableKeys
+      });
+    }
+    if (!hostMatchesAllowedSuffix(normalized.sourceHost, ALLOWED_HOST_SUFFIXES)) {
+      return sendJson(res, 400, {
+        error: "sourceHost is not an allowed Wise domain",
+        details: [`sourceHost=${normalized.sourceHost}`, `allowed=${ALLOWED_HOST_SUFFIXES.join(",")}`],
+        availableKeys
+      });
+    }
+
+    const expectedErrors = validateExpected(payload.expected, normalized);
+    if (expectedErrors.length > 0) {
+      return sendJson(res, 400, {
+        error: "expected constraints mismatch",
+        details: expectedErrors,
+        availableKeys
+      });
+    }
+
     const wiseReceiptHash = buildWiseReceiptHash(normalized, payload.attestation);
 
     return sendJson(res, 200, {
