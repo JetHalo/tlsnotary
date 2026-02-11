@@ -24,6 +24,23 @@ const ALLOWED_HOST_SUFFIXES = parseAllowedHostSuffixes(process.env.TLSN_ALLOWED_
 const CORS_ALLOW_ORIGIN = process.env.CORS_ALLOW_ORIGIN || "*";
 const notaryKeyCache = new Map();
 
+function toUnixSeconds(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const normalized = value > 1_000_000_000_000 ? value / 1000 : value;
+    return Math.trunc(normalized);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value.trim());
+    if (Number.isFinite(numeric)) {
+      const normalized = numeric > 1_000_000_000_000 ? numeric / 1000 : numeric;
+      return Math.trunc(normalized);
+    }
+    const parsedDate = Date.parse(value.trim());
+    if (Number.isFinite(parsedDate)) return Math.trunc(parsedDate / 1000);
+  }
+  return undefined;
+}
+
 function isBrowserCaptureAttestation(attestation) {
   const view = asRecord(attestation);
   return view.kind === "wise_browser_capture_v1";
@@ -125,7 +142,7 @@ function findMatchingRecentTransfer(recentTransfers, selectedTransfer) {
   const transferId = String(sel.transferId || "").trim();
   const amount = String(sel.amount || "").trim();
   const payerRef = String(sel.payerRef || "").trim();
-  const timestamp = Number(sel.timestamp);
+  const timestamp = toUnixSeconds(sel.timestamp);
 
   for (const item of recentTransfers) {
     const row = asRecord(item);
@@ -137,7 +154,7 @@ function findMatchingRecentTransfer(recentTransfers, selectedTransfer) {
     const row = asRecord(item);
     const sameAmount = amount && String(row.amount || "").trim() === amount;
     const samePayer = payerRef && String(row.payerRef || "").trim() === payerRef;
-    const rowTs = Number(row.timestamp);
+    const rowTs = toUnixSeconds(row.timestamp);
     const sameTs = Number.isFinite(timestamp) && Number.isFinite(rowTs) ? Math.abs(rowTs - timestamp) <= 60 : false;
     if (sameAmount && (samePayer || sameTs)) return row;
   }
@@ -200,9 +217,14 @@ async function handleVerifyWiseAttestation(req, res) {
     }
 
     const fallbackRow = selectedTransfer ?? asRecord(payload.selectedTransfer) ?? {};
+    const timestamp =
+      toUnixSeconds(fallbackRow.timestamp) ??
+      toUnixSeconds(attestationRaw.timestamp) ??
+      toUnixSeconds(asRecord(payload.expected).timestamp) ??
+      toUnixSeconds(attestationRaw.capturedAt);
     const normalized = {
       amount: String(fallbackRow.amount ?? attestationRaw.amount ?? "").trim(),
-      timestamp: Number(fallbackRow.timestamp ?? attestationRaw.timestamp ?? 0),
+      timestamp: timestamp ?? 0,
       payerRef: String(fallbackRow.payerRef ?? attestationRaw.payerRef ?? "").trim(),
       transferId: String(fallbackRow.transferId ?? attestationRaw.transferId ?? "").trim(),
       sourceHost: String(attestationRaw.sourceHost ?? "wise.com").trim().toLowerCase()

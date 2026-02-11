@@ -202,7 +202,16 @@ export function normalizeVerifierData(raw) {
     "accountHolder",
     "recipientText"
   ]);
-  const transferId = pickString(view, ["transferId", "paymentId", "transactionId", "id", "reference"]);
+  const transferId = pickString(view, [
+    "transferId",
+    "paymentId",
+    "transactionId",
+    "transactionNumber",
+    "transactionNo",
+    "transaction_number",
+    "id",
+    "reference"
+  ]);
   const sourceHost = pickString(view, ["sourceHost", "host", "domain", "originHost", "server_name"]);
 
   return {
@@ -299,6 +308,19 @@ function toFiniteNumber(value) {
   return undefined;
 }
 
+function toUnixSeconds(value) {
+  const finite = toFiniteNumber(value);
+  if (Number.isFinite(finite)) {
+    const normalized = finite > 1_000_000_000_000 ? finite / 1000 : finite;
+    return Math.trunc(normalized);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsedDate = Date.parse(value.trim());
+    if (Number.isFinite(parsedDate)) return Math.trunc(parsedDate / 1000);
+  }
+  return undefined;
+}
+
 function tryParseJson(text) {
   if (typeof text !== "string") return undefined;
   const trimmed = text.trim();
@@ -361,21 +383,44 @@ function normalizeTransferItem(item) {
   const amount =
     pickString(row, ["amount", "amountText", "value", "paymentAmount", "transferAmount"]) ??
     pickString(asRecord(row.amount), ["value", "text", "amount", "formatted"]);
-  const timestamp = pickNumber(row, ["timestamp", "time", "createdAt", "created_at", "paidAt", "date"]);
+  const timestampRaw =
+    pickNumber(row, ["timestamp", "time", "createdAtTs", "created_at_ts"]) ??
+    pickString(row, ["createdAt", "created_at", "paidAt", "date", "time"]);
   const payerRef =
     pickString(row, ["payerRef", "payer", "sender", "from", "counterparty", "name"]) ??
     pickString(asRecord(row.sender), ["name", "id"]) ??
     pickString(asRecord(row.counterparty), ["name", "id"]);
+  const transferText =
+    pickString(row, ["description", "details", "title", "note"]) ??
+    pickString(asRecord(row.transaction), ["description", "details", "title", "note"]) ??
+    "";
+  const transferNumber = /transaction\s*(?:number|id)?\s*#?\s*([0-9]{6,})/i.exec(transferText)?.[1];
   const transferId =
-    pickString(row, ["transferId", "paymentId", "transactionId", "id", "reference"]) ??
-    pickString(asRecord(row.transaction), ["id", "reference"]);
+    pickString(row, [
+      "transferId",
+      "paymentId",
+      "transactionId",
+      "transactionNumber",
+      "transactionNo",
+      "transaction_number",
+      "id",
+      "reference"
+    ]) ??
+    pickString(asRecord(row.transaction), [
+      "id",
+      "reference",
+      "transactionId",
+      "transactionNumber",
+      "transactionNo"
+    ]) ??
+    transferNumber;
   const status = pickString(row, ["status", "state", "paymentStatus"]);
   const currency = pickString(row, ["currency", "ccy"]) ?? pickString(asRecord(row.amount), ["currency", "ccy"]);
 
   if (!amount && !transferId && !payerRef) return undefined;
   return {
     amount: amount ?? "",
-    timestamp: toFiniteNumber(timestamp) ?? undefined,
+    timestamp: toUnixSeconds(timestampRaw),
     payerRef: payerRef ?? "",
     transferId: transferId ?? "",
     status: status ?? "",
