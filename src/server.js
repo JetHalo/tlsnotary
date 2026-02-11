@@ -216,17 +216,18 @@ async function handleVerifyWiseAttestation(req, res) {
       });
     }
 
-    const fallbackRow = selectedTransfer ?? asRecord(payload.selectedTransfer) ?? {};
+    const selectedRow = asRecord(payload.selectedTransfer);
+    const fallbackRow = selectedTransfer ?? selectedRow;
     const timestamp =
       toUnixSeconds(fallbackRow.timestamp) ??
       toUnixSeconds(attestationRaw.timestamp) ??
       toUnixSeconds(asRecord(payload.expected).timestamp) ??
       toUnixSeconds(attestationRaw.capturedAt);
     const normalized = {
-      amount: String(fallbackRow.amount ?? attestationRaw.amount ?? "").trim(),
+      amount: String(fallbackRow.amount ?? selectedRow.amount ?? attestationRaw.amount ?? "").trim(),
       timestamp: timestamp ?? 0,
-      payerRef: String(fallbackRow.payerRef ?? attestationRaw.payerRef ?? "").trim(),
-      transferId: String(fallbackRow.transferId ?? attestationRaw.transferId ?? "").trim(),
+      payerRef: String(fallbackRow.payerRef ?? selectedRow.payerRef ?? attestationRaw.payerRef ?? "").trim(),
+      transferId: String(fallbackRow.transferId ?? selectedRow.transferId ?? attestationRaw.transferId ?? "").trim(),
       sourceHost: String(attestationRaw.sourceHost ?? "wise.com").trim().toLowerCase()
     };
     const availableKeys = Object.keys({
@@ -236,6 +237,7 @@ async function handleVerifyWiseAttestation(req, res) {
     const details = [];
     if (!normalized.amount) details.push("amount missing");
     if (!Number.isFinite(normalized.timestamp) || normalized.timestamp <= 0) details.push("timestamp missing");
+    if (!normalized.transferId) details.push("transferId missing");
     if (!normalized.sourceHost) details.push("sourceHost missing");
     if (details.length > 0) {
       return sendJson(res, 400, {

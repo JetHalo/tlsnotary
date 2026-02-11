@@ -446,13 +446,22 @@ export function extractRecentTransfers(attestation, recv, limit = 5) {
   const seen = new Set();
   const result = [];
 
-  for (const root of roots) {
+  for (let rootIndex = 0; rootIndex < roots.length; rootIndex++) {
+    const root = roots[rootIndex];
     const arrays = flattenArrays(root);
-    for (const arr of arrays) {
-      for (const item of arr) {
+    for (let arrIndex = 0; arrIndex < arrays.length; arrIndex++) {
+      const arr = arrays[arrIndex];
+      for (let itemIndex = 0; itemIndex < arr.length; itemIndex++) {
+        const item = arr[itemIndex];
         const normalized = normalizeTransferItem(item);
         if (!normalized) continue;
-        const key = `${normalized.transferId}|${normalized.timestamp}|${normalized.amount}|${normalized.payerRef}`;
+        const keyBase = `${normalized.transferId}|${normalized.timestamp}|${normalized.amount}|${normalized.payerRef}`;
+        const hasStrongId =
+          Boolean(normalized.transferId) ||
+          (typeof normalized.timestamp === "number" && Number.isFinite(normalized.timestamp));
+        const key = hasStrongId
+          ? keyBase
+          : `${keyBase}|row:${rootIndex}:${arrIndex}:${itemIndex}`;
         if (seen.has(key)) continue;
         seen.add(key);
         result.push(normalized);
